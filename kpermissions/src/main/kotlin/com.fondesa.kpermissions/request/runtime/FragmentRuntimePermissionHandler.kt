@@ -21,10 +21,11 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.support.annotation.RequiresApi
+import android.support.v4.content.ContextCompat
 import android.util.Log
-import com.fondesa.kpermissions.controller.PermissionLifecycleController
-import com.fondesa.kpermissions.extensions.arePermissionsGranted
+import com.fondesa.kpermissions.controller.*
 import com.fondesa.kpermissions.extensions.flatString
+import com.fondesa.kpermissions.extensions.isPermissionGranted
 
 /**
  * Created by antoniolig on 05/01/18.
@@ -51,33 +52,76 @@ class FragmentRuntimePermissionHandler : Fragment(), RuntimePermissionHandler {
             return
         }
 
+        val context = activity ?: throw NullPointerException("The activity mustn't be null.")
+
         // Now the Fragment is not processing the permissions anymore.
         isProcessingPermissions = false
 
-        // Get the listener for this set of permissions.
+        // Get the listener for this group of permissions.
         val listener = listenerOf(permissions)
+        // Get the controller for this group of permissions.
+        val controller = controllerOf(permissions)
 
-        // Get the denied permissions.
-        val deniedPermissions = permissions.filterIndexed { index, _ ->
-            grantResults[index] == PackageManager.PERMISSION_DENIED
+        val acceptedList = mutableListOf<String>()
+        val permDeniedList = mutableListOf<String>()
+        val rationaleList = mutableListOf<String>()
+
+        permissions.forEach {
+            when {
+                context.isPermissionGranted(it) -> acceptedList.add(it)
+                shouldShowRequestPermissionRationale(it) -> rationaleList.add(it)
+                else -> permDeniedList.add(it)
+            }
         }
 
-        if (deniedPermissions.isNotEmpty()) {
-            val permissionsWithRationale = permissionsThatShouldShowRationale(deniedPermissions.toTypedArray())
-            val rationaleHandled = if (permissionsWithRationale.isNotEmpty()) {
-                // Show rationale of permissions.
-                listener.permissionsShouldShowRationale(permissionsWithRationale)
-            } else false
+        val acceptedPermissions = acceptedList.toTypedArray()
+        val deniedPermissions = permDeniedList.toTypedArray()
+        val rationalePermissions = rationaleList.toTypedArray()
 
-            val permanentlyDeniedPermissions = deniedPermissions.minus(permissionsWithRationale).toTypedArray()
-            if (!rationaleHandled && permanentlyDeniedPermissions.isNotEmpty()) {
-                // Some permissions are permanently denied by the user.
-                Log.d(TAG, "permissions permanently denied: ${permanentlyDeniedPermissions.flatString()}")
-                listener.permissionsPermanentlyDenied(permanentlyDeniedPermissions)
+        val acceptedDelivering = controller.acceptedDelivering()
+        val deniedDelivering = controller.permanentlyDeniedDelivering()
+        val rationaleDelivering = controller.rationaleDelivering()
+
+        val notifyAccepted = (acceptedDelivering == Delivering.AT_LEAST_ONE && acceptedPermissions.isNotEmpty()) ||
+                (acceptedDelivering == Delivering.ALL && acceptedPermissions.size == permissions.size)
+
+        if (notifyAccepted) {
+            // Some permissions are accepted.
+            listener.permissionsAccepted(acceptedPermissions)
+        }
+
+        val notifyDenied = (deniedDelivering == Delivering.AT_LEAST_ONE && deniedPermissions.isNotEmpty()) ||
+                (deniedDelivering == Delivering.ALL && deniedPermissions.size == permissions.size)
+
+        val notifyRationale = controller.rationaleCheck() != RationaleCheck.BEFORE &&
+                (rationaleDelivering == Delivering.AT_LEAST_ONE && rationalePermissions.isNotEmpty()) ||
+                (rationaleDelivering == Delivering.ALL && rationalePermissions.size == permissions.size)
+
+        val execDenied = {
+            // Some permissions are permanently denied by the user.
+            listener.permissionsPermanentlyDenied(deniedPermissions)
+        }
+        val execRationale = {
+            // Show rationale of permissions.
+            listener.permissionsShouldShowRationale(rationalePermissions)
+        }
+
+        if (notifyDenied && notifyRationale) {
+            val execAlways = controller.notAcceptedSecondaryExecution() == Execution.ALWAYS
+            val priority = controller.notAcceptedPriority()
+            if (priority == Priority.RATIONALE) {
+                if (!execRationale() || execAlways) {
+                    execDenied()
+                }
+            } else if (priority == Priority.DENIED) {
+                if (!execDenied() || execAlways) {
+                    execRationale()
+                }
             }
-        } else {
-            // All permissions are accepted.
-            listener.permissionsAccepted(permissions)
+        } else if (notifyDenied) {
+            execDenied()
+        } else if (notifyRationale) {
+            execRationale()
         }
     }
 
@@ -94,14 +138,30 @@ class FragmentRuntimePermissionHandler : Fragment(), RuntimePermissionHandler {
     override fun handleRuntimePermissions(permissions: Array<out String>) {
         val context = activity ?: throw NullPointerException("The activity mustn't be null.")
 
-        if (!context.arePermissionsGranted(*permissions)) {
+        val areAllGranted = permissions.indexOfFirst { !context.isPermissionGranted(it) } == -1
+        if (!areAllGranted) {
             if (isProcessingPermissions) {
                 // The Fragment can process only one request at the same time.
                 return
             }
 
+            // Get the lifecycle controller.
+            val controller = controllerOf(permissions)
+
+            val rationaleCheck = controller.rationaleCheck()
+            if (rationaleCheck == RationaleCheck.AFTER) {
+                // Request the permissions.
+                requestRuntimePermissions(permissions)
+                return
+            }
+
+            val rationaleDelivering = controller.rationaleDelivering()
+            // Get the permissions that must show the rationale.
             val permissionsWithRationale = permissionsThatShouldShowRationale(permissions)
-            val rationaleHandled = if (permissionsWithRationale.isNotEmpty()) {
+            val notifyRationale = (rationaleDelivering == Delivering.AT_LEAST_ONE && permissionsWithRationale.isNotEmpty()) ||
+                    (rationaleDelivering == Delivering.ALL && permissionsWithRationale.size == permissions.size)
+
+            val rationaleHandled = if (notifyRationale) {
                 val listener = listenerOf(permissions)
                 // Show rationale of permissions.
                 listener.permissionsShouldShowRationale(permissionsWithRationale)

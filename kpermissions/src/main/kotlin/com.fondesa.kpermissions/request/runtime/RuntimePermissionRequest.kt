@@ -48,7 +48,9 @@ class RuntimePermissionRequest(private val permissions: Array<out String>,
     }
 
     override fun permissionsShouldShowRationale(permissions: Array<out String>): Boolean = invokeOn(rationaleListener) {
-        val nonce = permissionNonceGenerator.provideNonce(handler, permissions)
+        val fullPermissions = this@RuntimePermissionRequest.permissions
+        // Generate the nonce with all the permissions of this request.
+        val nonce = permissionNonceGenerator.provideNonce(handler, fullPermissions)
         onPermissionsShouldShowRationale(permissions, nonce)
     }
 

@@ -21,8 +21,8 @@ import android.content.pm.PackageManager
 import android.support.v4.content.ContextCompat
 import com.fondesa.kpermissions.controller.Delivering
 import com.fondesa.kpermissions.controller.PermissionLifecycleController
+import com.fondesa.kpermissions.extensions.isPermissionGranted
 import com.fondesa.kpermissions.request.BasePermissionRequest
-import com.fondesa.kpermissions.request.PermissionRequest
 
 /**
  * Created by antoniolig on 05/01/18.
@@ -37,7 +37,7 @@ class ManifestPermissionRequest(private val context: Context,
         val deniedList = mutableListOf<String>()
 
         permissions.forEach {
-            if (ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED) {
+            if (context.isPermissionGranted(it)) {
                 acceptedList.add(it)
             } else {
                 deniedList.add(it)
@@ -50,24 +50,18 @@ class ManifestPermissionRequest(private val context: Context,
         val acceptedDelivering = lifecycleController.acceptedDelivering()
         val deniedDelivering = lifecycleController.permanentlyDeniedDelivering()
 
-        if (deniedDelivering == Delivering.ALL) {
-            if (acceptedPermissions.isEmpty()) {
-                deniedListener?.onPermissionsPermanentlyDenied(deniedPermissions)
-            }
-        } else if (deniedDelivering == Delivering.AT_LEAST_ONE) {
-            if (deniedPermissions.isNotEmpty()) {
-                deniedListener?.onPermissionsPermanentlyDenied(deniedPermissions)
-            }
+        val notifyAccepted = (acceptedDelivering == Delivering.ALL && deniedPermissions.isEmpty()) ||
+                (acceptedDelivering == Delivering.AT_LEAST_ONE && acceptedPermissions.isNotEmpty())
+
+        if (notifyAccepted) {
+            acceptedListener?.onPermissionsAccepted(acceptedPermissions)
         }
 
-        if (acceptedDelivering == Delivering.ALL) {
-            if (deniedPermissions.isEmpty()) {
-                acceptedListener?.onPermissionsAccepted(acceptedPermissions)
-            }
-        } else if (acceptedDelivering == Delivering.AT_LEAST_ONE) {
-            if (acceptedPermissions.isNotEmpty()) {
-                acceptedListener?.onPermissionsAccepted(acceptedPermissions)
-            }
+        val notifyDenied = (deniedDelivering == Delivering.ALL && acceptedPermissions.isEmpty()) ||
+                (deniedDelivering == Delivering.AT_LEAST_ONE && deniedPermissions.isNotEmpty())
+
+        if (notifyDenied) {
+            deniedListener?.onPermissionsPermanentlyDenied(deniedPermissions)
         }
     }
 }
